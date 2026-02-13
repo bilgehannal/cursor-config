@@ -1,0 +1,28 @@
+{
+    "collections" : {
+        "general": {
+            "rules": ["bash", "common"],
+            "commands": ["get-conflict-responsible"]
+        },
+        "go" : {
+            "rules": ["go", "docker", "common", "bash"],
+            "commands": ["get-conflict-responsible"]
+        },
+        "python" : {
+            "rules": ["python", "common", "bash"],
+            "commands": ["get-conflict-responsible"]
+        },
+        "devops" : {
+            "rules": ["docker", "kubernetes", "common", "bash", "terraform", "ansible"],
+            "commands": ["get-conflict-responsible"]
+        },
+        "redis" : {
+            "rules": ["redis", "common", "bash"],
+            "commands": ["get-conflict-responsible"]
+        },
+        "frontend" : {
+            "rules": ["vue", "common", "bash"],
+            "commands": ["get-conflict-responsible"]
+        }
+    }
+}

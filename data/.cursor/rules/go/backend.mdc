@@ -1,0 +1,207 @@
+---
+description: Go backend project conventions — Echo server, Prometheus, Swagger, YAML config, Makefile
+alwaysApply: true
+---
+
+# Go Backend Standards
+
+## HTTP Framework
+
+Always use **Echo** (`github.com/labstack/echo/v4`) as the HTTP server framework unless explicitly told otherwise.
+
+## Go Version
+
+Always use the system's current Go version. Detect it via `go env GOVERSION` and set it in `go.mod`.
+
+## Configuration
+
+- Use **YAML** files for all configuration (`config.yaml`, `config.local.yaml`).
+- Parse with `gopkg.in/yaml.v3` or `github.com/knadh/koanf`.
+- Load config path from `CONFIG_PATH` env var, defaulting to `config.yaml`.
+
+## Prometheus Metrics
+
+- Install and register `github.com/labstack/echo-contrib/echoprometheus` middleware.
+- Expose metrics at `/metrics`.
+
+## Swagger / OpenAPI
+
+- Use `github.com/swaggo/echo-swagger` for serving Swagger UI at `/docs/*`.
+- Generated Swagger files live under `docs/` directory (`docs.go`, `swagger.json`, `swagger.yaml`).
+- An `openapi.yaml` file must also exist at project root (converted from `swagger.json`).
+- Annotate the main server entry point (`cmd/server/main.go`) with swag comments.
+
+## Project Structure
+
+```
+cmd/
+  server/
+    main.go          # Entry point with swag annotations
+internal/
+  config/            # YAML config loader
+  handler/           # Echo route handlers
+  middleware/        # Custom middleware
+  model/             # Domain models
+  repository/        # Data access layer
+  service/           # Business logic
+docs/                # Generated swagger files
+  docs.go
+  swagger.json
+  swagger.yaml
+openapi.yaml         # OpenAPI spec at root
+config.yaml          # Default config
+config.local.yaml    # Local dev config
+Makefile
+Dockerfile
+go.mod
+go.sum
+```
+
+## Makefile
+
+Every project **must** include a `Makefile` with these targets:
+
+```makefile
+.PHONY: build run test clean clear download deps swagger openapi preRequirements run-local run-test docker-build docker-run
+
+PROJECT_NAME=$(shell basename $(CURDIR))
+GOBASE=$(shell pwd)
+GOBIN=$(GOBASE)
+OUTPUT_PATH=$(GOBASE)/output
+BINARY=$(OUTPUT_PATH)/$(PROJECT_NAME)
+
+# Install required tools
+preRequirements:
+	@echo "Installing required tools..."
+	@go install github.com/google/wire/cmd/wire@latest || true
+	@go install github.com/swaggo/swag/cmd/swag@latest || true
+	@echo "Pre-requirements installed"
+
+# Clean build artifacts
+clear:
+	@echo "Cleaning build artifacts..."
+	rm -rf $(OUTPUT_PATH)
+	rm -rf bin/ docs/ openapi.yaml
+
+# Download dependencies
+download:
+	@echo "Downloading dependencies..."
+	go mod download -x
+
+# Install dependencies and tidy
+deps: download
+	@echo "Installing dependencies..."
+	go mod tidy
+	@which swag > /dev/null || (echo "Installing swag..." && go install github.com/swaggo/swag/cmd/swag@latest)
+
+# Build the application
+build: clear
+	@echo "Building $(PROJECT_NAME)..."
+	@mkdir -p $(OUTPUT_PATH)
+	@if [ -f "wire.go" ] || [ -f "wire_gen.go" ]; then \
+		echo "Running wire..."; \
+		wire || true; \
+	fi
+	@if [ -f "cmd/server/main.go" ]; then \
+		echo "Generating Swagger docs..."; \
+		swag init -g cmd/server/main.go --output docs --parseDependency --parseInternal || true; \
+	fi
+	go build -o $(BINARY) ./cmd/server
+	@echo "Build complete: $(BINARY)"
+
+# Run tests
+test:
+	@echo "Running tests..."
+	go test ./...
+
+# Run the application
+run: build
+	@echo "Running $(PROJECT_NAME)..."
+	$(BINARY)
+
+# Run with default config
+run-local: build
+	@echo "Running $(PROJECT_NAME) with config..."
+	CONFIG_PATH=config.yaml $(BINARY)
+
+# Run with local test config
+run-test: build
+	@echo "Running $(PROJECT_NAME) with local test config..."
+	CONFIG_PATH=config.local.yaml $(BINARY)
+
+# Generate Swagger docs
+swagger: deps
+	@which swag > /dev/null || (echo "swag not found. Installing..." && go install github.com/swaggo/swag/cmd/swag@latest)
+	@mkdir -p docs
+	swag init -g cmd/server/main.go --output docs --parseDependency --parseInternal
+	@echo "Swagger docs generated in docs/"
+
+# Convert swagger.json to openapi.yaml
+openapi: swagger
+	@if [ ! -f ./docs/swagger.json ]; then \
+		echo "Error: swagger.json not found. Run 'make swagger' first."; \
+		exit 1; \
+	fi
+	@echo "Converting swagger.json to openapi.yaml..."
+	@if command -v yq > /dev/null 2>&1; then \
+		yq eval -o=yaml ./docs/swagger.json > openapi.yaml && echo "openapi.yaml generated successfully"; \
+	elif command -v python3 > /dev/null 2>&1; then \
+		python3 -c "import json, yaml; data = json.load(open('./docs/swagger.json')); yaml.dump(data, open('openapi.yaml', 'w'), default_flow_style=False, sort_keys=False)" && echo "openapi.yaml generated"; \
+	else \
+		echo "Error: Need yq or python3 (with PyYAML). Install yq: go install github.com/mikefarah/yq/v4@latest"; \
+		exit 1; \
+	fi
+
+# Alias
+clean: clear
+
+# Docker
+docker-build:
+	@echo "Building Docker image..."
+	docker build -t $(PROJECT_NAME):latest .
+
+docker-run: docker-build
+	@echo "Running Docker container..."
+	docker run -d --name $(PROJECT_NAME) -p 8080:8080 \
+		-v $(PWD)/config.yaml:/app/config.yaml:ro \
+		$(PROJECT_NAME):latest
+```
+
+## Echo Server Bootstrap (Reference)
+
+```go
+// cmd/server/main.go
+package main
+
+import (
+    "github.com/labstack/echo/v4"
+    "github.com/labstack/echo/v4/middleware"
+    "github.com/labstack/echo-contrib/echoprometheus"
+    echoSwagger "github.com/swaggo/echo-swagger"
+    _ "yourmodule/docs" // generated swagger docs
+)
+
+// @title       Your API
+// @version     1.0
+// @description API server
+// @BasePath    /api/v1
+func main() {
+    e := echo.New()
+
+    // Middleware
+    e.Use(middleware.Logger())
+    e.Use(middleware.Recover())
+    e.Use(echoprometheus.NewMiddleware("app"))
+
+    // Prometheus metrics
+    e.GET("/metrics", echoprometheus.NewHandler())
+
+    // Swagger
+    e.GET("/docs/*", echoSwagger.WrapHandler)
+
+    // Routes
+    // e.GET("/api/v1/health", handler.Health)
+
+    e.Logger.Fatal(e.Start(":8080"))
+}
+```
