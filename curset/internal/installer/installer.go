@@ -34,19 +34,27 @@ func NewInstaller(client *github.Client) (*Installer, error) {
 func (inst *Installer) Install(col collection.Collection, name string) error {
 	fmt.Printf("Installing collection: %s\n\n", name)
 
-	inst.manifest.Collection = name
+	inst.manifest.AddCollection(name)
 
+	var installErr error
 	for objType, entries := range col {
 		for _, entry := range entries {
 			if err := inst.installEntry(objType, entry); err != nil {
-				return fmt.Errorf("failed to install %s/%s: %w", objType, entry, err)
+				fmt.Fprintf(os.Stderr, "  error: %s/%s: %v\n", objType, entry, err)
+				installErr = err
+				continue
 			}
 		}
 	}
 
-	// Save the manifest after successful install.
+	// Always save the manifest so partial progress is tracked.
 	if err := inst.manifest.Save(); err != nil {
 		return fmt.Errorf("failed to save manifest: %w", err)
+	}
+
+	if installErr != nil {
+		fmt.Println("\nDone (with errors).")
+		return fmt.Errorf("some entries failed to install")
 	}
 
 	fmt.Println("\nDone.")
@@ -243,5 +251,84 @@ func (inst *Installer) installFileByName(objType, entry string) error {
 		Files: installedFiles,
 	})
 
+	return nil
+}
+
+// Uninstall removes a collection's entries that are not shared with other installed collections.
+// allCollections is the full collection.json data used to check for shared entries.
+func (inst *Installer) Uninstall(colToRemove collection.Collection, name string, allCollections map[string]collection.Collection) error {
+	if !inst.manifest.HasCollection(name) {
+		return fmt.Errorf("collection '%s' is not installed", name)
+	}
+
+	fmt.Printf("Uninstalling collection: %s\n\n", name)
+
+	// Build a set of entries used by OTHER installed collections (not the one being removed).
+	shared := make(map[string]bool) // key: "type/name"
+	for _, otherName := range inst.manifest.Collections {
+		if otherName == name {
+			continue
+		}
+		otherCol, ok := allCollections[otherName]
+		if !ok {
+			continue
+		}
+		for objType, entries := range otherCol {
+			for _, entry := range entries {
+				shared[objType+"/"+entry] = true
+			}
+		}
+	}
+
+	// Remove entries that belong to this collection and are NOT shared.
+	for objType, entries := range colToRemove {
+		for _, entry := range entries {
+			key := objType + "/" + entry
+			if shared[key] {
+				fmt.Printf("  kept: %s/%s (used by another installed collection)\n", objType, entry)
+				continue
+			}
+
+			if err := inst.removeEntry(objType, entry); err != nil {
+				return fmt.Errorf("failed to remove %s/%s: %w", objType, entry, err)
+			}
+		}
+	}
+
+	// Update manifest.
+	inst.manifest.RemoveCollection(name)
+	if err := inst.manifest.Save(); err != nil {
+		return fmt.Errorf("failed to save manifest: %w", err)
+	}
+
+	fmt.Println("\nDone.")
+	return nil
+}
+
+// removeEntry removes a single entry (file or directory) from the local .cursor/ folder.
+func (inst *Installer) removeEntry(objType, entry string) error {
+	manifestEntry := inst.manifest.GetEntry(objType, entry)
+	if manifestEntry == nil {
+		fmt.Printf("  skipped: %s/%s (not managed by curset)\n", objType, entry)
+		return nil
+	}
+
+	if manifestEntry.IsDir {
+		localDir := filepath.Join(".cursor", objType, entry)
+		if err := os.RemoveAll(localDir); err != nil {
+			return fmt.Errorf("failed to remove directory %s: %w", localDir, err)
+		}
+		fmt.Printf("  removed: %s\n", localDir)
+	} else {
+		for _, f := range manifestEntry.Files {
+			localPath := filepath.Join(".cursor", f)
+			if err := os.Remove(localPath); err != nil && !os.IsNotExist(err) {
+				return fmt.Errorf("failed to remove file %s: %w", localPath, err)
+			}
+			fmt.Printf("  removed: %s\n", localPath)
+		}
+	}
+
+	inst.manifest.RemoveEntry(objType, entry)
 	return nil
 }

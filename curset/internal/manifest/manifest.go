@@ -19,8 +19,8 @@ type Entry struct {
 
 // Manifest tracks all items installed by curset.
 type Manifest struct {
-	Collection string  `json:"collection"` // last installed collection name
-	Entries    []Entry `json:"entries"`
+	Collections []string `json:"collections"` // list of installed collection names
+	Entries     []Entry  `json:"entries"`
 }
 
 // Load reads the manifest from .cursor/.curset.json.
@@ -71,6 +71,33 @@ func (m *Manifest) IsManaged(objType, name string) bool {
 	return false
 }
 
+// HasCollection checks if a collection is already installed.
+func (m *Manifest) HasCollection(name string) bool {
+	for _, c := range m.Collections {
+		if c == name {
+			return true
+		}
+	}
+	return false
+}
+
+// AddCollection adds a collection name to the installed list if not already present.
+func (m *Manifest) AddCollection(name string) {
+	if !m.HasCollection(name) {
+		m.Collections = append(m.Collections, name)
+	}
+}
+
+// RemoveCollection removes a collection name from the installed list.
+func (m *Manifest) RemoveCollection(name string) {
+	for i, c := range m.Collections {
+		if c == name {
+			m.Collections = append(m.Collections[:i], m.Collections[i+1:]...)
+			return
+		}
+	}
+}
+
 // AddOrUpdate adds a new entry or updates an existing one in the manifest.
 func (m *Manifest) AddOrUpdate(entry Entry) {
 	for i, e := range m.Entries {
@@ -80,4 +107,24 @@ func (m *Manifest) AddOrUpdate(entry Entry) {
 		}
 	}
 	m.Entries = append(m.Entries, entry)
+}
+
+// RemoveEntry removes an entry from the manifest by type and name.
+func (m *Manifest) RemoveEntry(objType, name string) {
+	for i, e := range m.Entries {
+		if e.Type == objType && e.Name == name {
+			m.Entries = append(m.Entries[:i], m.Entries[i+1:]...)
+			return
+		}
+	}
+}
+
+// GetEntry returns an entry by type and name, or nil if not found.
+func (m *Manifest) GetEntry(objType, name string) *Entry {
+	for i, e := range m.Entries {
+		if e.Type == objType && e.Name == name {
+			return &m.Entries[i]
+		}
+	}
+	return nil
 }

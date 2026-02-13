@@ -38,6 +38,7 @@ func init() {
 	rootCmd.PersistentFlags().BoolVarP(&gitignoreFlag, "gitignore", "g", false, "Add .cursor/ to .gitignore in the current directory")
 	rootCmd.AddCommand(listCmd)
 	rootCmd.AddCommand(installCmd)
+	rootCmd.AddCommand(uninstallCmd)
 	rootCmd.AddCommand(localCmd)
 }
 
